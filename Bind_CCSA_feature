@@ -1,48 +1,65 @@
 #### generate CCSA transformed feature
 import pandas as pd
 import re
+import numpy as np
 
 data_df = pd.read_pickle("/mnt/binf/eric/Mercury_Dec2023/Feature_all_Apr2024_frozenassource.pkl")
+# data_df = pd.read_pickle("/mnt/binf/eric/Mercury_Dec2023_MGI2/Feature_Apr2024_SeparationAsSource.pkl")
+# frozen_info = pd.read_csv(
+#     "/mnt/binf/eric/Mercury_Dec2023/Info/Test1.all.full.info.list",
+#     sep="\t",
+#     low_memory=False,
+# )
+CCSA_path = "/mnt/binf/eric/CCSA_test_0426/"
 
-pattern = r'(Frag)|(Arm)|(Cnv)|(Griffin)'
+pattern = r'(Frag)|(Arm)|(Cnv)|(Griffin)|(GMM)'
 columns_to_drop = data_df.filter(regex=pattern,axis=1).columns
 data_df_drop = data_df.drop(columns = columns_to_drop)
 
-columns_to_modify = data_df_drop.columns
-columns_modified = []
-for column_tmp in columns_to_modify:
-    if "MCMS_" in column_tmp or "Ma_" in column_tmp or "Gemini_" in column_tmp:
-        columns_modified.append("CCSA_"+column_tmp)
-    else:
-        columns_modified.append(column_tmp)
+# columns_to_modify = data_df_drop.columns
+# columns_modified = []
+# for column_tmp in columns_to_modify:
+#     if "MCMS_" in column_tmp or "Ma_" in column_tmp or "Gemini_" in column_tmp:
+#         columns_modified.append("CCSA_"+column_tmp)
+#     else:
+#         columns_modified.append(column_tmp)
 
-data_df_drop.columns = columns_modified
+# data_df_drop.columns = columns_modified
 
 #### read CCSA features
-feature_list = ["Frag","Arm","Cnv","Griffin"]
+feature_list = ["Frag","Arm","Cnv","Griffin","GMM"]
 
 CCSA_df = pd.DataFrame()
 
 for feature_tmp in feature_list:
-    data_tmp = pd.read_csv(f'/mnt/binf/eric/CCSA_test/{feature_tmp}_CCSA_feature.csv').filter(regex="(CCSA)|(SampleID)",axis=1)
-
+    
+    print(feature_tmp)    
+    datacv_tmp = pd.read_csv(f'{CCSA_path}/cv/{feature_tmp}_CCSA_feature_CV.csv').filter(regex="(CCSA)|(SampleID)|(Fold)",axis=1)
+    data_tmp = pd.read_csv(f'{CCSA_path}/{feature_tmp}_CCSA_feature.csv').filter(regex="(CCSA)|(SampleID)",axis=1)
+    data_tmp = data_tmp.loc[~data_tmp["SampleID"].isin(datacv_tmp["SampleID"])]
+    data_tmp["Fold"] = np.nan
+    data_tmp = pd.concat([data_tmp, datacv_tmp],axis=0)
+    
     if CCSA_df.shape[0] > 0:
-        CCSA_df = CCSA_df.merge(data_tmp, on = "SampleID", how="inner")
+        CCSA_df = CCSA_df.merge(data_tmp, on = ["SampleID","Fold"], how="inner")
+        print(f"data_tmp shape: {data_tmp.shape}")
+        print(f"CCSA_df shape: {CCSA_df.shape}")
+        
     else:
         CCSA_df = data_tmp
-
+        print(f"data_tmp shape: {data_tmp.shape}")
+        print(f"CCSA_df shape: {CCSA_df.shape}")
+        
 ### bind frozen info
-frozen_info = pd.read_csv(
-    "/mnt/binf/eric/Mercury_Dec2023/Info/Test1.all.full.info.list",
-    sep="\t",
-    low_memory=False,
-)
-frozen_info.loc[:, "Frozen"] = "Unfrozen"
-frozen_info.loc[frozen_info["InGsFreezeCondition"] < 0, "Frozen"] = "Frozen"
 
-CCSA_all = data_df_drop.merge(CCSA_df,on="SampleID",how="inner").merge(frozen_info.loc[:, ["SampleID", "Frozen"]], on="SampleID", how="inner")
+# frozen_info.loc[:, "Frozen"] = "Unfrozen"
+# frozen_info.loc[frozen_info["InGsFreezeCondition"] < 0, "Frozen"] = "Frozen"
 
-CCSA_all.to_pickle("/mnt/binf/eric/Mercury_Dec2023/Feature_all_Apr2024_CCSA.pkl")
-CCSA_all.to_csv("/mnt/binf/eric/Mercury_Dec2023/Feature_all_Apr2024_CCSA.csv")
+CCSA_all = data_df_drop.merge(CCSA_df,on="SampleID",how="inner")
+
+print(CCSA_all.shape)
+
+CCSA_all.to_pickle(f"{CCSA_path}/Feature_all_Apr232024_CCSA.pkl")
+CCSA_all.to_csv(f"{CCSA_path}/Feature_all_Apr232024_CCSA.csv")
 
 

@@ -76,6 +76,11 @@ def fit_CCSA(model, loader, X_test_tensor, y_test_tensor, device, feature_type, 
                 model.eval()
                 src_img, src_label, tgt_img, tgt_label in loader
                 
+                src_img = loader.dataset.X_source
+                src_label = loader.dataset.y_source
+                tgt_img = loader.dataset.X_target
+                tgt_label = loader.dataset.y_target
+                
                 # src_img, tgt_img = (x.to(device, dtype=torch.float) for x in [src_img, tgt_img])
                 # src_label, tgt_label = (x.to(device, dtype=torch.float) for x in [src_label, tgt_label])
                 src_img = src_img.to(device)
@@ -99,7 +104,7 @@ def fit_CCSA(model, loader, X_test_tensor, y_test_tensor, device, feature_type, 
                 
                 print(f"==================== Epoch {epoch} =====================")
                 print(f"Source AUC: {src_auc:.4f}, Target AUC: {tgt_auc:.4f}, Test AUC: {test_auc:.4f}")
-                print(f"threshold 95: {thres95:.4f}, R01B sens: {tgt_sens:.4f}, target spec: {tgt_spec:.4f}")
+                print(f"threshold 95: {thres95:.4f}, target sens: {tgt_sens:.4f}, target spec: {tgt_spec:.4f}")
                 print("=========================================================")
                 
                 if src_auc >= max_auc:

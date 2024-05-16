@@ -16,6 +16,8 @@ from fit_model import fit_CCSA
 
 def cv_CCSA(model, loader, device, feature_type, batch_size, epoches, batch_patience, alpha, output_path):
         
+        init_state = deepcopy(model.state_dict())
+        
         ### split source and target datasets
         fold_src = StratifiedKFold(n_splits=5,shuffle=True,random_state=42)
         fold_tgt = StratifiedKFold(n_splits=5,shuffle=True,random_state=42)
@@ -45,6 +47,7 @@ def cv_CCSA(model, loader, device, feature_type, batch_size, epoches, batch_pati
             
             print(f"------------- Start fitting source fold: {foldi_src} and target fold: {foldi_tgt} -------------")
             model.reset_parameters()
+            model.load_state_dict(init_state)
             
             # output_path_i = output_path+"/"+str(foldi_src)
             
@@ -88,7 +91,7 @@ def cv_CCSA(model, loader, device, feature_type, batch_size, epoches, batch_pati
                 sens_tgt, spec_tgt = find_sensandspec(y_tgt[index_validfold_tgt], pred_validfold_tgt,thres98)
                 
                 print(f"------------ Fold: {foldi_src} metrics ---------------")
-                print(f"Trainfold source AUC: {auc_src_trainfold:.4f}")
+                print(f"Trainfold source AUC: {auc_src_trainfold:.4f}, threshold98: {thres98:.4f}")
                 print(f"Source AUC: {auc_src:.4f}, sensitivity: {sens_src:.4f}, specificity: {spec_src:.4f}")
                 print(f"Target AUC: {auc_tgt:.4f}, sensitivity: {sens_tgt:.4f}, specificity: {spec_tgt:.4f}")
                 print("--------------------------------------------------")

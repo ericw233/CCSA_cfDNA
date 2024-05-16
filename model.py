@@ -8,7 +8,7 @@ from utils.find_threshold import find_threshold, find_sensitivity, find_specific
 from sklearn.metrics import roc_auc_score
 
 class CCSA(nn.Module):
-    def __init__(self, feature_type, input_size, out1, out2, conv1, pool1, drop1, conv2, pool2, drop2, feature_fc1, feature_fc2, fc1, fc2, drop3):
+    def __init__(self, feature_type, input_size, out1, out2, conv1, pool1, drop1, conv2, pool2, drop2, fc1, fc2, drop3, feature_fc1, feature_fc2):
         super(CCSA,self).__init__()        
        
         # Feature extractor p1
@@ -188,8 +188,10 @@ class CCSA(nn.Module):
     def reset_parameters(self):
         for module in self.children():
             ### some layers do not have parameters to reset
-            if hasattr(module, 'reset_parameters'):
+            # if hasattr(module, 'reset_parameters'):
+            if isinstance(module, nn.Conv1d) or isinstance(module, nn.Linear):
                 module.reset_parameters()
+
         
     
 

@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
+import sys
+import json
 from sklearn.metrics import roc_auc_score
 from copy import deepcopy
 
@@ -14,17 +16,40 @@ from data.load_dataset import TrainSet, TestSet, MyDataset
 from fit_model import fit_CCSA
 from cv_model import cv_CCSA
 
+feature_type = "Griffin"
+input_size = 2600
+data_dir="/mnt/binf/eric/Mercury_Dec2023/Feature_all_Apr2024_frozenassource_v2.pkl"
+output_path = "/mnt/binf/eric/CCSA_May2024Results/CCSA_0516/"
 
 batch_size = 256
-epoch_num = 5
+epoch_num = 2
+batch_patience = 500
+
 alpha = 0.5
 
-feature_type = "Frag"
-input_size = 1100
-data_dir="/mnt/binf/eric/Mercury_Dec2023/Feature_all_Apr2024_frozenassource.pkl"
+########### read from argument inputs
+if len(sys.argv) >= 4:
+    feature_type = sys.argv[1]
+    input_size = int(sys.argv[2])
 
-batch_patience = 2000
-output_path = "/mnt/binf/eric/CCSA_test_0415/"
+    data_dir = sys.argv[3]
+    output_path = sys.argv[4]
+    
+    batch_size = int(sys.argv[5])
+    epoch_num = int(sys.argv[6])
+    batch_patience = int(sys.argv[7])
+    alpha = float(sys.argv[8])
+    
+    print(f"\nGetting arguments ===============================>")
+    print(f"feature type: {feature_type}, input size: {input_size}, \n\
+        output path: {output_path}, data path: {data_dir}, \n\
+        batch size: {batch_size}, epoch num: {epoch_num}, batch_patience: {batch_patience}, alpha: {alpha}\n")  
+else:
+    print(f"\nNot enough inputs, using default arguments:\n\
+        feature type: {feature_type}, input size: {input_size}, \n\
+        output path: {output_path}, data path: {data_dir}, \n\
+        batch size: {batch_size}, epoch num: {epoch_num}, batch_patience: {batch_patience}, alpha: {alpha}\n")
+
 
 if os.path.exists(output_path):
     print("Output directory already exists")
@@ -40,15 +65,55 @@ else:
 #              'fc1': 64, 'fc2': 16, 'drop3': 0.2}
 
 best_config={'feature_type':feature_type,'input_size':input_size,
-             'out1': 32, 'out2': 128, 'conv1': 3, 'pool1': 2, 'drop1': 0.2, 
-             'conv2': 4, 'pool2': 1, 'drop2': 0.4, 
-             'feature_fc1': 256, 'feature_fc2': 128,
-             'fc1': 64, 'fc2': 16, 'drop3': 0.2}
+             'out1': 32, 'out2': 128, 
+             'conv1': 3, 'pool1': 2, 'drop1': 0.2, 
+             'conv2': 3, 'pool2': 1, 'drop2': 0.4, 
+             'fc1': 64, 'fc2': 16, 'drop3': 0.2,
+             'feature_fc1': 256, 'feature_fc2': 64}
+
+config_file = f"{output_path}/{feature_type}_config.txt"
+if os.path.exists(config_file):
+    ##### load best_config from text
+    import ast
+    # Specify the path to the text file
+    with open(config_file, 'r') as cf:
+        config_txt = cf.read()
+    config_dict = ast.literal_eval(config_txt)
+    # Print the dictionary
+    print(config_dict)
+    config_dict['feature_type'] = feature_type
+    config_dict['input_size'] = input_size
+    config_dict['feature_fc1'] = 256
+    config_dict['feature_fc2'] = 64
+    
+    selected_dict = {key: config_dict[key] for key, _ in best_config.items() if key in config_dict}
+    best_config = selected_dict
+
+    
+    print("***********************   Read from existing config results   ***********************************")
+    print(best_config)
+
+else:
+    print("***********************   Use default best config   ***********************************")
+    print(best_config)
+
+mark_config = best_config.copy()
+mark_config['batch_size'] = batch_size
+mark_config['epoch_num'] = epoch_num
+mark_config['alpha'] = alpha
+mark_config['batch_patience'] = batch_patience
+
+output_file = f'{output_path}/{feature_type}_parameters.json'
+with open(output_file, 'w') as f:
+    json.dump(mark_config, f)
+
+print("Parameters saved")
 
 device = torch.device("cuda")
 model = CCSA(**best_config)
 model = model.to(device)
 
+init_state = deepcopy(model.state_dict())
 ####### prepare dataset
 train_set = TrainSet(data_dir=data_dir, input_size=input_size, feature_type=feature_type)
 train_set_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, drop_last=True)
@@ -60,11 +125,12 @@ testing_index = test_set.data_idonly.loc[test_set.data_idonly["train"] == "testi
 X_test_tensor = test_set.X_test[testing_index]
 y_test_tensor = test_set.y_test[testing_index]
 
-print("Dataset Length Train : ", len(train_set), " Test : ", len(test_set))
+print("Dataset length training: ", len(train_set), " testing: ", len(test_set))
 
 ################ fitting model
+model.load_state_dict(init_state)
 fit_CCSA(model, train_set_loader,X_test_tensor,y_test_tensor,device,feature_type,epoch_num,batch_patience,alpha,output_path)
-print("======================   complete fitting the {feature_type} model!  =======================")
+print(f"======================   complete fitting the {feature_type} model!  =======================")
 
 ### GPU outage solution
 # model.to("cpu")

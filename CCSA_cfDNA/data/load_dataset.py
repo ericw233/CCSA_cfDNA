@@ -4,13 +4,15 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
-from data.load_data import load_data_1D_impute
+
+from ..data.load_data import load_data_1D_impute
 
 # create pairs
 class TrainSet(Dataset):
     def __init__(self, data_dir, input_size, feature_type):
 
-        data, X_train_tensor, y_train_tensor, _, X_valid_tensor, y_valid_tensor, _, _, _, _, _, _, _ = load_data_1D_impute(data_dir, input_size, feature_type) 
+        (data, X_train_tensor, y_train_tensor, _, X_valid_tensor, y_valid_tensor, _, _, _, _, _, _, _, 
+         transformer) = load_data_1D_impute(data_dir, input_size, feature_type) 
 
         self.X_source=X_train_tensor
         self.y_source=y_train_tensor
@@ -53,7 +55,7 @@ class TestSet(Dataset):
         
         ### TestSet is different from TrainSet, does not return pairwise images
         
-        data, _, _, _, _, _, _, X_all_tensor, y_all_tensor, _, _, _, _ = load_data_1D_impute(data_dir, input_size, feature_type) 
+        (data, _, _, _, _, _, _, X_all_tensor, y_all_tensor, _, _, _, _,transformer) = load_data_1D_impute(data_dir, input_size, feature_type) 
         self.X_test = X_all_tensor
         self.y_test = y_all_tensor        
         self.data_idonly=data[["SampleID","Train_Group","train","Project","Domain","R01B_label"]]

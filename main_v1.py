@@ -1,193 +1,172 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import matplotlib.pyplot as plt
-import pandas as pd
 import os
 import sys
 import json
-from sklearn.metrics import roc_auc_score
+import torch
+import pandas as pd
 from copy import deepcopy
-
 from torch.utils.data import DataLoader
-from model import CCSA
-from utils.find_threshold import find_threshold, find_sensandspec, find_sensitivity
-from data.load_dataset import TrainSet, TestSet, MyDataset
-from fit_model import fit_CCSA
-from cv_model import cv_CCSA
+from sklearn.metrics import roc_auc_score
 
-feature_type = "Griffin"
-input_size = 2600
-data_dir="/mnt/binf/eric/Mercury_Dec2023/Feature_all_Apr2024_frozenassource_v2.pkl"
-output_path = "/mnt/binf/eric/CCSA_May2024Results/CCSA_0516/"
+from CCSA_cfDNA.model.model import CCSA
+from CCSA_cfDNA.utils.find_threshold import find_threshold, find_sensandspec, find_sensitivity
+from CCSA_cfDNA.data.load_dataset import TrainSet, TestSet
+from CCSA_cfDNA.training.fit_model import fit_CCSA
+from CCSA_cfDNA.training.cv_model import cv_CCSA
 
-batch_size = 256
-epoch_num = 2
-batch_patience = 500
+def parse_arguments():
+    # get arguments from command lines or use default values
+    defaults = {
+        "feature_type": "Frag",
+        "input_size": 1100,
+        "data_dir": "/mnt/binf/eric/Mercury_June2024_MGI_new/Feature_June2024_T7MGI2000_CCSA_v2.csv",
+        "output_path": "/mnt/binf/eric/CCSA_June2024Results/CCSA_0627/",
+        "batch_size": 256,
+        "epoch_num": 3,
+        "batch_patience": 500,
+        "alpha": 0.5,
+    }
 
-alpha = 0.5
+    if len(sys.argv) >= 9:
+        keys = ["feature_type", "input_size", "data_dir", "output_path", "batch_size", "epoch_num", "batch_patience", "alpha"]
+        args = dict(zip(keys, sys.argv[1:]))
+        args["input_size"] = int(args["input_size"])
+        args["batch_size"] = int(args["batch_size"])
+        args["epoch_num"] = int(args["epoch_num"])
+        args["batch_patience"] = int(args["batch_patience"])
+        args["alpha"] = float(args["alpha"])
+    else:
+        args = defaults
+        print("Using default arguments:", defaults)
 
-########### read from argument inputs
-if len(sys.argv) >= 4:
-    feature_type = sys.argv[1]
-    input_size = int(sys.argv[2])
+    os.makedirs(args["output_path"], exist_ok=True)
+    return args
 
-    data_dir = sys.argv[3]
-    output_path = sys.argv[4]
+def load_params(output_path, feature_type, default_params):
     
-    batch_size = int(sys.argv[5])
-    epoch_num = int(sys.argv[6])
-    batch_patience = int(sys.argv[7])
-    alpha = float(sys.argv[8])
+    # provide json config files for hyperparameter settings; otherwise use default values.
+    param_file = f"{output_path}/{feature_type}_parameters.json"
+    if os.path.exists(param_file):
+        with open(param_file, "r") as file:
+            params = json.load(file)
+            params.update({"feature_type": feature_type})
+            params = {k: params[k] for k in default_params if k in params} # only update keys existing in default_params.
+    else:
+        params = default_params
+
+    # with open(config_file, "w") as file:
+    #     json.dump(config, file)
+
+    return params
+
+def prepare_datasets(data_dir, input_size, feature_type, batch_size):
+    # Prepare training and testing datasets. In TrainSet, 'train' subset is the src_domain, 'valid' subset is the tgt_domain.
+    train_set = TrainSet(data_dir=data_dir, input_size=input_size, feature_type=feature_type)
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, drop_last=True)
+
+    # Testset is the independent one for validation.
+    test_set = TestSet(data_dir=data_dir, input_size=input_size, feature_type=feature_type)
+    testing_index = test_set.data_idonly.loc[test_set.data_idonly["train"] == "testing"].index
+
+    return train_loader, test_set, testing_index
+
+def evaluate_model(model, test_set, testing_index, output_path, feature_type):
+    # Evaluate the model and save results.
+    device = next(model.parameters()).device
+
+    with torch.no_grad():
+        model.eval()
+        pred_all, feature_all = model(test_set.X_test.to(device))
+
+    data_idonly = test_set.data_idonly
+    data_idonly["CCSA_score"] = pred_all.detach().cpu().numpy()
+    data_idonly["Response"] = (data_idonly["Train_Group"] == "Cancer").astype(int)
+    data_idonly.to_csv(f"{output_path}/{feature_type}_CCSA_score.csv")
+
+    colnames = [f"CCSA_{feature_type}_{i}" for i in range(feature_all.size(1))]
+    feature_df = pd.DataFrame(feature_all.detach().cpu().numpy(), columns=colnames)
+    feature_df_bind = pd.concat([data_idonly[["SampleID", "Train_Group", "train"]], feature_df], axis=1)
+    feature_df_bind.to_csv(f"{output_path}/{feature_type}_CCSA_feature.csv")
+
+    return data_idonly
+
+def compute_metrics(data_idonly):
     
-    print(f"\nGetting arguments ===============================>")
-    print(f"feature type: {feature_type}, input size: {input_size}, \n\
-        output path: {output_path}, data path: {data_dir}, \n\
-        batch size: {batch_size}, epoch num: {epoch_num}, batch_patience: {batch_patience}, alpha: {alpha}\n")  
-else:
-    print(f"\nNot enough inputs, using default arguments:\n\
-        feature type: {feature_type}, input size: {input_size}, \n\
-        output path: {output_path}, data path: {data_dir}, \n\
-        batch size: {batch_size}, epoch num: {epoch_num}, batch_patience: {batch_patience}, alpha: {alpha}\n")
+    train_data = data_idonly[data_idonly["train"] == "training"]
+    test_data = data_idonly[data_idonly["train"] == "testing"]
+    valid_data = data_idonly[data_idonly["train"] == "validation"]
 
+    thres95 = find_threshold(train_data["Response"], train_data["CCSA_score"], 0.95)
+    thres98 = find_threshold(train_data["Response"], train_data["CCSA_score"], 0.98)
 
-if os.path.exists(output_path):
-    print("Output directory already exists")
-else:
-    os.makedirs(output_path)
-    print("Output directory created")
+    metrics = {
+        "valid": find_sensandspec(test_data["Response"], test_data["CCSA_score"], thres95),
+        "target": find_sensandspec(valid_data["Response"], valid_data["CCSA_score"], thres95),
+    }
 
-##### define model
-# best_config={'input_size':input_size,
-#              'out1': 32, 'out2': 128, 'conv1': 3, 'pool1': 2, 'drop1': 0.0, 
-#              'conv2': 4, 'pool2': 1, 'drop2': 0.4, 
-#              'feature_fc1': 256, 'feature_fc2': 128,
-#              'fc1': 64, 'fc2': 16, 'drop3': 0.2}
+    print("Validation Metrics:", metrics["valid"])
+    print("Target Metrics:", metrics["target"])
 
-best_config={'feature_type':feature_type,'input_size':input_size,
-             'out1': 32, 'out2': 128, 
-             'conv1': 3, 'pool1': 2, 'drop1': 0.2, 
-             'conv2': 3, 'pool2': 1, 'drop2': 0.4, 
-             'fc1': 64, 'fc2': 16, 'drop3': 0.2,
-             'feature_fc1': 256, 'feature_fc2': 64}
+def main():
+    args = parse_arguments()
 
-config_file = f"{output_path}/{feature_type}_config.txt"
-if os.path.exists(config_file):
-    ##### load best_config from text
-    import ast
-    # Specify the path to the text file
-    with open(config_file, 'r') as cf:
-        config_txt = cf.read()
-    config_dict = ast.literal_eval(config_txt)
-    # Print the dictionary
-    print(config_dict)
-    config_dict['feature_type'] = feature_type
-    config_dict['input_size'] = input_size
-    config_dict['feature_fc1'] = 256
-    config_dict['feature_fc2'] = 64
-    
-    selected_dict = {key: config_dict[key] for key, _ in best_config.items() if key in config_dict}
-    best_config = selected_dict
+    default_params = {
+        "feature_type": args["feature_type"],
+        "input_size": args["input_size"],
+        "out1": 32,
+        "out2": 128,
+        "conv1": 3,
+        "pool1": 2,
+        "drop1": 0.2,
+        "conv2": 3,
+        "pool2": 1,
+        "drop2": 0.4,
+        "fc1": 64,
+        "fc2": 16,
+        "drop3": 0.2,
+        "feature_fc1": 256,
+        "feature_fc2": 64,
+    }
 
-    
-    print("***********************   Read from existing config results   ***********************************")
-    print(best_config)
+    params = load_params(args["output_path"], args["feature_type"], default_params)
 
-else:
-    print("***********************   Use default best config   ***********************************")
-    print(best_config)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = CCSA(**params).to(device)
+    init_state = deepcopy(model.state_dict())
 
-mark_config = best_config.copy()
-mark_config['batch_size'] = batch_size
-mark_config['epoch_num'] = epoch_num
-mark_config['alpha'] = alpha
-mark_config['batch_patience'] = batch_patience
+    train_loader, test_set, testing_index = prepare_datasets(
+        args["data_dir"], args["input_size"], args["feature_type"], args["batch_size"]
+    )
 
-output_file = f'{output_path}/{feature_type}_parameters.json'
-with open(output_file, 'w') as f:
-    json.dump(mark_config, f)
+    model.load_state_dict(init_state)
+    fit_CCSA(
+        model,
+        train_loader,
+        test_set.X_test[testing_index],
+        test_set.y_test[testing_index],
+        device,
+        args["feature_type"],
+        args["epoch_num"],
+        args["batch_patience"],
+        args["alpha"],
+        args["output_path"],
+    )
 
-print("Parameters saved")
+    data_idonly = evaluate_model(model, test_set, testing_index, args["output_path"], args["feature_type"])
+    compute_metrics(data_idonly)
 
-device = torch.device("cuda")
-model = CCSA(**best_config)
-model = model.to(device)
+    cv_output_path = os.path.join(args["output_path"], "cv")
+    os.makedirs(cv_output_path, exist_ok=True)
+    cv_CCSA(
+        model,
+        train_loader,
+        device,
+        args["feature_type"],
+        args["batch_size"],
+        args["epoch_num"],
+        args["batch_patience"],
+        args["alpha"],
+        cv_output_path,
+    )
 
-init_state = deepcopy(model.state_dict())
-####### prepare dataset
-train_set = TrainSet(data_dir=data_dir, input_size=input_size, feature_type=feature_type)
-train_set_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, drop_last=True)
-
-test_set = TestSet(data_dir=data_dir, input_size=input_size, feature_type=feature_type)
-# test_set_loader = DataLoader(test_set, batch_size=batch, shuffle=True, drop_last=True)
-# tensors in the test_set class are actually X_all_tensor and y_all_tensor
-testing_index = test_set.data_idonly.loc[test_set.data_idonly["train"] == "testing"].index
-X_test_tensor = test_set.X_test[testing_index]
-y_test_tensor = test_set.y_test[testing_index]
-
-print("Dataset length training: ", len(train_set), " testing: ", len(test_set))
-
-################ fitting model
-model.load_state_dict(init_state)
-fit_CCSA(model, train_set_loader,X_test_tensor,y_test_tensor,device,feature_type,epoch_num,batch_patience,alpha,output_path)
-print(f"======================   complete fitting the {feature_type} model!  =======================")
-
-### GPU outage solution
-# model.to("cpu")
-# pred_all, feature_all = model(test_set.X_test)
-
-### GPU 
-with torch.no_grad():
-    model.eval()
-    pred_all, feature_all = model(test_set.X_test.to(device))
-
-data_idonly = test_set.data_idonly
-data_idonly["CCSA_score"] = pred_all.detach().cpu().numpy()
-data_idonly["Response"] = (data_idonly["Train_Group"] == "Cancer").astype(int)
-data_idonly.to_csv(f"{output_path}/{feature_type}_CCSA_score.csv")
-
-colnames=['CCSA_'+feature_type+'_'+str(i) for i in range(0,best_config["feature_fc2"])]
-feature_all_df = pd.DataFrame(feature_all.detach().cpu().numpy(),columns=colnames)
-feature_all_df_bind = pd.concat([data_idonly.loc[:,["SampleID","Train_Group","train"]],feature_all_df],axis=1)
-feature_all_df_bind.to_csv(f"{output_path}/{feature_type}_CCSA_feature.csv")
-
-#### get R01B sens
-thres95 = find_threshold(data_idonly.loc[data_idonly['train']=="training",'Response'],data_idonly.loc[data_idonly['train']=="training",'CCSA_score'],0.95)
-thres98 = find_threshold(data_idonly.loc[data_idonly['train']=="training",'Response'],data_idonly.loc[data_idonly['train']=="training",'CCSA_score'],0.98)
-
-data_idonly_test = data_idonly.loc[data_idonly["train"] == "testing"]
-
-train_auc = roc_auc_score(data_idonly.loc[data_idonly['train']=="training",'Response'],data_idonly.loc[data_idonly['train']=="training",'CCSA_score'])
-valid_auc = roc_auc_score(data_idonly.loc[data_idonly['train']=="testing",'Response'],data_idonly.loc[data_idonly['train']=="testing",'CCSA_score'])
-tgt_auc = roc_auc_score(data_idonly.loc[data_idonly['train']=="validation",'Response'],data_idonly.loc[data_idonly['train']=="validation",'CCSA_score'])
-
-valid_sens95, valid_spec95 = find_sensandspec(data_idonly.loc[data_idonly['train']=="testing",'Response'],data_idonly.loc[data_idonly['train']=="testing",'CCSA_score'],thres95)
-valid_sens98, valid_spec98 = find_sensandspec(data_idonly.loc[data_idonly['train']=="testing",'Response'],data_idonly.loc[data_idonly['train']=="testing",'CCSA_score'],thres98)
-
-tgt_sens95, tgt_spec95 = find_sensandspec(data_idonly.loc[data_idonly['train']=="validation",'Response'],data_idonly.loc[data_idonly['train']=="validation",'CCSA_score'],thres95)
-tgt_sens98, tgt_spec98 = find_sensandspec(data_idonly.loc[data_idonly['train']=="validation",'Response'],data_idonly.loc[data_idonly['train']=="validation",'CCSA_score'],thres98)
-
-print(f"Validation AUC: {valid_auc:.4f}, sens95: {valid_sens95:.4f}, spec95: {valid_spec95:.4f}, sens98: {valid_sens98:.4f}, spec98: {valid_spec98:.4f}")
-print(f"Target AUC: {tgt_auc:.4f}, sens95: {tgt_sens95:.4f}, spec95: {tgt_spec95:.4f}, sens98: {tgt_sens98:.4f}, spec98: {tgt_spec98:.4f}")
-
-#### R01B detection
-R01B_sens95 = find_sensitivity(data_idonly.loc[data_idonly['Project'].str.contains("R01B"),'Response'],data_idonly.loc[data_idonly['Project'].str.contains("R01B"),'CCSA_score'],thres95)
-R01B_sens98 = find_sensitivity(data_idonly.loc[data_idonly['Project'].str.contains("R01B"),'Response'],data_idonly.loc[data_idonly['Project'].str.contains("R01B"),'CCSA_score'],thres98)
-
-R01B_sens95_test = find_sensitivity(data_idonly_test.loc[data_idonly_test['Project'].str.contains("R01B"),'Response'],data_idonly_test.loc[data_idonly_test['Project'].str.contains("R01B"),'CCSA_score'],thres95)
-R01B_sens98_test = find_sensitivity(data_idonly_test.loc[data_idonly_test['Project'].str.contains("R01B"),'Response'],data_idonly_test.loc[data_idonly_test['Project'].str.contains("R01B"),'CCSA_score'],thres98)
-
-print(f"Threshold - spec95: {thres95:.4f}, spec98: {thres98:.4f} ")
-print(f"R01B sens 95 - all: {R01B_sens95*161:.1f}, test: {R01B_sens95_test*111:.1f}, train: {(R01B_sens95*161 - R01B_sens95_test*111):.1f}")
-print(f"R01B sens 98 - all: {R01B_sens98*161:.1f}, test: {R01B_sens98_test*111:.1f}, train: {(R01B_sens98*161 - R01B_sens98_test*111):.1f}")
-
-############## Generate CV scores and features 
-output_path_cv = output_path+"/cv/"
-if os.path.exists(output_path_cv):
-    print("CV output directory already exists")
-else:
-    os.makedirs(output_path_cv)
-    print("CV output directory created")
-
-cv_CCSA(model, train_set_loader, device, feature_type, batch_size, epoch_num, batch_patience, alpha, output_path_cv)
-
+if __name__ == "__main__":
+    main()

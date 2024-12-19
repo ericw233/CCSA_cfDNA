@@ -1,11 +1,12 @@
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
+from sklearn.metrics import roc_auc_score
 
 from copy import deepcopy
-from utils.loss_function import CSALoss, csa_loss
-from utils.find_threshold import find_threshold, find_sensitivity, find_specificity
-from sklearn.metrics import roc_auc_score
+
+from ..utils.loss_function import CSALoss, csa_loss
+from ..utils.find_threshold import find_threshold, find_sensitivity, find_specificity
 
 class CCSA(nn.Module):
     def __init__(self, feature_type, input_size, out1, out2, conv1, pool1, drop1, conv2, pool2, drop2, fc1, fc2, drop3, feature_fc1, feature_fc2):

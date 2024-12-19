@@ -2,9 +2,22 @@ import torch
 import torch.nn as nn
 import pandas as pd
 import numpy as np
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.impute import SimpleImputer
-from utils.pad_and_reshape import pad_and_reshape, pad_and_reshape_1D
+from sklearn.base import BaseEstimator, TransformerMixin
+from ..utils.pad_and_reshape import pad_and_reshape_1D
+
+class DropAllNA(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        self.columns_to_drop = X.columns[X.isna().all()].tolist()
+        return self
+    def transform(self, X, y=None):
+        return X.drop(columns=self.columns_to_drop)       
+
+def create_feature_transformer():
+    transformer = Pipeline(steps=[('drop_na',DropAllNA()),('imputer',SimpleImputer(strategy='mean')),('scaler',MinMaxScaler())])
+    return transformer
 
 def load_data_1D_impute(data_dir="/mnt/binf/eric/Mercury_Dec2023/Feature_all_Dec2023_revised2.pkl", input_size=900, feature_type = "Arm"):
     # Read data from CSV file
@@ -34,48 +47,39 @@ def load_data_1D_impute(data_dir="/mnt/binf/eric/Mercury_Dec2023/Feature_all_Dec
     X_r01b = data.loc[data["R01B_label"] == "R01B_match"].filter(regex = feature_type, axis=1)
     y_r01b = (data.loc[data["R01B_label"] == "R01B_match","Train_Group"] == "Cancer").astype(int)
 
-    #### drop constant NA columns based on X_train
-    na_columns = X_train.columns[X_train.isna().all()]
-    X_train_drop = X_train.drop(columns = na_columns)
-    X_test_drop = X_test.drop(columns = na_columns)
-    X_all_drop = X_all.drop(columns = na_columns)
-    X_r01b_drop = X_r01b.drop(columns = na_columns)
-    
-    #### impute variables based on X_train_drop
-    mean_imputer = SimpleImputer(strategy = 'mean')
-    X_train_drop_imputed = mean_imputer.fit_transform(X_train_drop)
-    X_test_drop_imputed = mean_imputer.transform(X_test_drop)
-    X_all_drop_imputed = mean_imputer.transform(X_all_drop)
-    X_r01b_drop_imputed = mean_imputer.transform(X_r01b_drop)
-    
-    # Scale the features to a suitable range (e.g., [0, 1])
-    scaler = MinMaxScaler()
-    X_train_scaled = scaler.fit_transform(X_train_drop_imputed)
-    X_test_scaled = scaler.transform(X_test_drop_imputed)
-    X_all_scaled = scaler.transform(X_all_drop_imputed)
-    X_r01b_scaled = scaler.transform(X_r01b_drop_imputed)
+    # Create the feature transformer pipeline
+    feature_transformer = create_feature_transformer()
+
+    # Fit and transform the training data, and transform the other datasets
+    X_train_transformed = feature_transformer.fit_transform(X_train)
+    X_test_transformed = feature_transformer.transform(X_test)
+    X_all_transformed = feature_transformer.transform(X_all)
+    X_r01b_transformed = feature_transformer.transform(X_r01b)
 
     # Convert the data to PyTorch tensors
-    input_size = input_size
-    X_train_tensor = pad_and_reshape_1D(X_train_scaled, input_size).type(torch.float32)
+    X_train_tensor = pad_and_reshape_1D(X_train_transformed, input_size).type(torch.float32)
     y_train_tensor = torch.tensor(y_train.values, dtype=torch.float32)
     d_train_tensor = torch.tensor(d_train.values, dtype=torch.float32)
     
-    X_test_tensor = pad_and_reshape_1D(X_test_scaled, input_size).type(torch.float32)
+    X_test_tensor = pad_and_reshape_1D(X_test_transformed, input_size).type(torch.float32)
     y_test_tensor = torch.tensor(y_test.values, dtype=torch.float32)
     d_test_tensor = torch.tensor(d_test.values, dtype=torch.float32)
 
-    X_all_tensor = pad_and_reshape_1D(X_all_scaled, input_size).type(torch.float32)
+    X_all_tensor = pad_and_reshape_1D(X_all_transformed, input_size).type(torch.float32)
     y_all_tensor = torch.tensor(y_all.values, dtype=torch.float32)
     d_all_tensor = torch.tensor(d_all.values, dtype=torch.float32)
 
-    X_r01b_tensor = pad_and_reshape_1D(X_r01b_scaled, input_size).type(torch.float32)
+    X_r01b_tensor = pad_and_reshape_1D(X_r01b_transformed, input_size).type(torch.float32)
     y_r01b_tensor = torch.tensor(y_r01b.values, dtype=torch.float32)
     
     ### keep unshuffled X_train
     # X_train_tensor_unshuffled = pad_and_reshape_1D(X_train_scaled, input_size).type(torch.float32)
     # y_train_tensor_unshuffled = torch.tensor(y_train.values, dtype=torch.float32)
     train_sampleid = data.loc[data["train"] == "training","SampleID"].values
-
-    return data, X_train_tensor, y_train_tensor, d_train_tensor, X_test_tensor, y_test_tensor, d_test_tensor, X_all_tensor, y_all_tensor, d_all_tensor, X_r01b_tensor, y_r01b_tensor, train_sampleid
+    data_idonly = data.loc[:,["SampleID","train","Train_Group","Project"]]
+    data_idonly_train = data.loc[data["train"] == "training",["SampleID","train","Train_Group","Project","Domain","R01B_label"]].reset_index()
+ 
+    return (data, data_idonly_train, X_train_tensor, y_train_tensor, d_train_tensor, X_test_tensor, y_test_tensor, d_test_tensor, 
+            X_all_tensor, y_all_tensor, d_all_tensor, X_r01b_tensor, y_r01b_tensor, train_sampleid, 
+            feature_transformer)
 

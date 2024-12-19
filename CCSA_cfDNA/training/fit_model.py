@@ -4,8 +4,8 @@ from sklearn.metrics import roc_auc_score
 from copy import deepcopy
 import matplotlib.pyplot as plt
 
-from utils.loss_function import csa_loss
-from utils.find_threshold import find_threshold, find_sensandspec
+from ..utils.loss_function import csa_loss
+from ..utils.find_threshold import find_threshold, find_sensandspec
 
 def fit_CCSA(model, loader, X_test_tensor, y_test_tensor, device, feature_type, epoches, batch_patience, alpha, output_path):
                 
@@ -34,13 +34,13 @@ def fit_CCSA(model, loader, X_test_tensor, y_test_tensor, device, feature_type, 
         # loss = model.train_on_batch([X1, X2], [y1, yc])
         for epoch in range(epoches):
             model.train()
-            for i, (src_img, src_label, tgt_img, tgt_label) in enumerate(loader):
+            for i, (src_df, src_label, tgt_df, tgt_label) in enumerate(loader):
                 
-                src_img, tgt_img = (x.to(device, dtype=torch.float) for x in [src_img, tgt_img])
+                src_df, tgt_df = (x.to(device, dtype=torch.float) for x in [src_df, tgt_df])
                 src_label, tgt_label = (x.to(device, dtype=torch.float) for x in [src_label, tgt_label])
                 
-                src_pred, src_feature = model(src_img)
-                _, tgt_feature = model(tgt_img)
+                src_pred, src_feature = model(src_df)
+                _, tgt_feature = model(tgt_df)
                 
                 loss_ce  = ce_loss(src_pred, src_label)
                 loss_csa = csa_loss(src_feature, tgt_feature,
@@ -74,25 +74,25 @@ def fit_CCSA(model, loader, X_test_tensor, y_test_tensor, device, feature_type, 
                 
             with torch.no_grad():
                 model.eval()
-                src_img, src_label, tgt_img, tgt_label in loader
+                src_df, src_label, tgt_df, tgt_label in loader
                 
-                src_img = loader.dataset.X_source
+                src_df = loader.dataset.X_source
                 src_label = loader.dataset.y_source
-                tgt_img = loader.dataset.X_target
+                tgt_df = loader.dataset.X_target
                 tgt_label = loader.dataset.y_target
                 
-                # src_img, tgt_img = (x.to(device, dtype=torch.float) for x in [src_img, tgt_img])
+                # src_df, tgt_df = (x.to(device, dtype=torch.float) for x in [src_df, tgt_df])
                 # src_label, tgt_label = (x.to(device, dtype=torch.float) for x in [src_label, tgt_label])
-                src_img = src_img.to(device)
-                tgt_img = tgt_img.to(device)
+                src_df = src_df.to(device)
+                tgt_df = tgt_df.to(device)
                 src_label = src_label.to(device)
                 tgt_label = tgt_label.to(device)
                 
                 X_test_tensor = X_test_tensor.to(device)
                 y_test_tensor = y_test_tensor.to(device)
                 
-                src_pred, _ = model(src_img)
-                tgt_pred, _ = model(tgt_img)
+                src_pred, _ = model(src_df)
+                tgt_pred, _ = model(tgt_df)
                 test_pred, _ = model(X_test_tensor)
                 
                 src_auc = roc_auc_score(src_label.to("cpu"), src_pred.to("cpu"))
@@ -131,6 +131,7 @@ def fit_CCSA(model, loader, X_test_tensor, y_test_tensor, device, feature_type, 
         plt.title('Losses over epoches')
         plt.legend()
         plt.grid(True)
-        plt.show()
+        plt.savefig(f"{output_path}/loss_{feature_type}.png")
+        plt.close()
             
         return loss.item()

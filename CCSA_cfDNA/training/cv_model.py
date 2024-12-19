@@ -9,10 +9,10 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import DataLoader
 
-from data.load_dataset import MyDataset
-from utils.loss_function import csa_loss
-from utils.find_threshold import find_threshold, find_sensandspec
-from fit_model import fit_CCSA
+from ..data.load_dataset import MyDataset
+from ..utils.loss_function import csa_loss
+from ..utils.find_threshold import find_threshold, find_sensandspec
+from .fit_model import fit_CCSA
 
 def cv_CCSA(model, loader, device, feature_type, batch_size, epoches, batch_patience, alpha, output_path):
         
